@@ -67,7 +67,7 @@ It is intended to be used as a **field data collection tool**, particularly by g
 
 # 📲 Demo
 
-👉 **Live App on Vercel**
+👉 **https://pothole-recording-app.vercel.app/**
 
 ---
 
