@@ -1,25 +1,27 @@
 import React, { useRef, useState, useEffect } from 'react';
-import { generateGPX } from '../utils/gpxHelper';
+import { generateGPX } from '../utils/gpxHelper'; // Helper to generate GPX file from GPS data
 import '../styles/recorder.css';
-import { saveAs } from 'file-saver';
-import JSZip from 'jszip';
+import { saveAs } from 'file-saver'; // For downloading files
+import JSZip from 'jszip'; // For zipping files
 
 const Recorder = () => {
+  // State hooks
   const [recording, setRecording] = useState(false);
-  const [mediaBlobUrl, setMediaBlobUrl] = useState(null);
-  const [locations, setLocations] = useState([]);
-  const [photos, setPhotos] = useState([]); // Stores clicked photos with GPS
-  const [captureMessage, setCaptureMessage] = useState(''); // Message for photo capture feedback
+  const [mediaBlobUrl, setMediaBlobUrl] = useState(null); // URL for video preview
+  const [locations, setLocations] = useState([]); // GPS track log
+  const [photos, setPhotos] = useState([]); // Array of captured photos with metadata
+  const [captureMessage, setCaptureMessage] = useState(''); // UI message for photo capture
 
+  // Refs for storing media and geolocation handlers
   const mediaRecorderRef = useRef(null);
   const recordedChunks = useRef([]);
   const streamRef = useRef(null);
   const locationWatchId = useRef(null);
   const videoPreviewRef = useRef(null);
 
+  // Cleanup on component unmount
   useEffect(() => {
     return () => {
-      // Cleanup on unmount
       if (streamRef.current) {
         streamRef.current.getTracks().forEach((track) => track.stop());
       }
@@ -29,19 +31,20 @@ const Recorder = () => {
     };
   }, []);
 
+  // Start recording video and location
   const startRecording = async () => {
-    // Step 1: Ask for location permission first
     navigator.geolocation.getCurrentPosition(
-      async (initialPosition) => {
-        // ✅ Location access granted - continue with media access
+      async () => {
         try {
+          // Get access to rear camera
           const stream = await navigator.mediaDevices.getUserMedia({
             video: { facingMode: 'environment' },
             audio: false,
           });
-  
+
           streamRef.current = stream;
-  
+
+          // Attach stream to video element
           if (videoPreviewRef.current) {
             videoPreviewRef.current.srcObject = stream;
             videoPreviewRef.current.onloadedmetadata = () => {
@@ -50,33 +53,35 @@ const Recorder = () => {
               });
             };
           }
-  
+
+          // Set up media recorder
           mediaRecorderRef.current = new MediaRecorder(stream);
           recordedChunks.current = [];
-  
+
           mediaRecorderRef.current.ondataavailable = (event) => {
             if (event.data.size > 0) {
               recordedChunks.current.push(event.data);
             }
           };
-  
+
           mediaRecorderRef.current.onstop = () => {
             const blob = new Blob(recordedChunks.current, { type: 'video/webm' });
             setMediaBlobUrl(URL.createObjectURL(blob));
           };
-  
+
           mediaRecorderRef.current.start();
           setRecording(true);
           setLocations([]);
           setPhotos([]);
-  
-          // Start tracking location
+
+          // Watch geolocation changes
           locationWatchId.current = navigator.geolocation.watchPosition(
             (position) => {
               const { latitude, longitude } = position.coords;
               const timestamp = new Date().toISOString();
               setLocations((prev) => {
                 const last = prev[prev.length - 1];
+                // Avoid duplicates
                 if (!last || last.lat !== latitude || last.lon !== longitude) {
                   return [...prev, { lat: latitude, lon: longitude, time: timestamp }];
                 }
@@ -93,14 +98,13 @@ const Recorder = () => {
             }
           );
         } catch (err) {
-          console.error('Error accessing media devices.', err);
-          alert('Please allow camera access and use a secure context (HTTPS).');
+          console.error('Media device error:', err);
+          alert('Please allow camera access and use HTTPS.');
         }
       },
       (error) => {
-        // ❌ Location permission denied or error
-        console.error('Location permission denied:', error);
-        alert('Location permission is required to start recording.');
+        console.error('Location error:', error);
+        alert('Location access is required to record.');
       },
       {
         enableHighAccuracy: true,
@@ -108,8 +112,8 @@ const Recorder = () => {
       }
     );
   };
-  
-  // Stop recording and return video blob
+
+  // Stop recording and clean up
   const stopRecording = () => {
     return new Promise((resolve) => {
       if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
@@ -121,7 +125,6 @@ const Recorder = () => {
         };
         mediaRecorderRef.current.stop();
       } else {
-        // Already stopped
         resolve(null);
       }
 
@@ -139,21 +142,22 @@ const Recorder = () => {
     });
   };
 
-  // 📸 Take photo and draw GPS coordinates on it + show message
+  // Capture a photo from live preview
   const capturePhoto = () => {
     if (!videoPreviewRef.current) return;
 
-    // Show capture message immediately for better UX
     setCaptureMessage('Photo captured!');
     setTimeout(() => setCaptureMessage(''), 2000);
 
+    // Create a canvas to draw frame
     const canvas = document.createElement('canvas');
-    canvas.width = videoPreviewRef.current.videoWidth;
-    canvas.height = videoPreviewRef.current.videoHeight;
+    canvas.width = videoPreviewRef.current.videoWidth || 300;
+    canvas.height = videoPreviewRef.current.videoHeight || 200;
+
     const ctx = canvas.getContext('2d');
     ctx.drawImage(videoPreviewRef.current, 0, 0, canvas.width, canvas.height);
 
-    // Fetch GPS asynchronously
+    // Get GPS location and annotate photo
     navigator.geolocation.getCurrentPosition(
       (position) => {
         const { latitude, longitude } = position.coords;
@@ -168,7 +172,7 @@ const Recorder = () => {
           second: '2-digit',
         });
 
-        // Overlay GPS & timestamp on canvas
+        // Add annotation
         ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
         ctx.fillRect(10, canvas.height - 60, canvas.width - 20, 50);
         ctx.fillStyle = '#fff';
@@ -178,7 +182,6 @@ const Recorder = () => {
 
         const imageData = canvas.toDataURL('image/jpeg');
 
-        // Add the photo data with GPS overlay
         setPhotos((prev) => [
           ...prev,
           { image: imageData, lat: latitude, lon: longitude, time: timestamp },
@@ -186,48 +189,38 @@ const Recorder = () => {
       },
       (error) => {
         console.warn('Photo GPS error:', error);
-
-        // If GPS fails, still add photo without GPS overlay
         const imageData = canvas.toDataURL('image/jpeg');
-        setPhotos((prev) => [
-          ...prev,
-          { image: imageData, lat: null, lon: null, time: 'Unknown' },
-        ]);
+        setPhotos((prev) => [...prev, { image: imageData, lat: null, lon: null, time: 'Unknown' }]);
       }
     );
   };
 
+  // Download all recorded data as a ZIP file
   const saveFiles = async () => {
     let videoBlob;
 
     if (!mediaBlobUrl) {
-      // If recording still going, stop and get blob
       videoBlob = await stopRecording();
     } else {
-      // Use recorded chunks to form the blob if available
-      if (recordedChunks.current.length > 0) {
-        videoBlob = new Blob(recordedChunks.current, { type: 'video/webm' });
-      } else {
-        videoBlob = null;
-      }
+      videoBlob = new Blob(recordedChunks.current, { type: 'video/webm' });
     }
 
     if (!videoBlob) {
-      alert('No video recorded to save!');
+      alert('No video recorded!');
       return;
     }
 
+    // Generate GPX file
     const gpx = generateGPX(locations);
     const gpxBlob = new Blob([gpx], { type: 'application/gpx+xml' });
 
     const zip = new JSZip();
-    zip.file('pothole_video.mp4', videoBlob);
-    zip.file('pothole_locations.gpx', gpxBlob);
+    zip.file('pothole_video.mp4', videoBlob); // Save video
+    zip.file('pothole_locations.gpx', gpxBlob); // Save GPS track
 
-    // 🗂 Add all captured photos
+    // Save annotated photos
     photos.forEach((photo, index) => {
-      const base64 = photo.image.split(',')[1]; 
-      // Safely handle null lat/lon in filename
+      const base64 = photo.image.split(',')[1];
       const latStr = photo.lat !== null ? photo.lat.toFixed(4) : 'unknownLat';
       const lonStr = photo.lon !== null ? photo.lon.toFixed(4) : 'unknownLon';
       const filename = `photo_${index + 1}_${latStr}_${lonStr}.jpg`;
@@ -235,9 +228,10 @@ const Recorder = () => {
     });
 
     const zipBlob = await zip.generateAsync({ type: 'blob' });
-    saveAs(zipBlob, 'pothole_report.zip');
+    saveAs(zipBlob, 'pothole_report.zip'); // Trigger download
   };
 
+  // Reset UI and state
   const reset = () => {
     setMediaBlobUrl(null);
     setLocations([]);
@@ -248,33 +242,32 @@ const Recorder = () => {
 
   return (
     <div className="recorder-container" style={{ position: 'relative' }}>
+      {/* Live preview */}
       <video
         ref={videoPreviewRef}
-        width="300"
+        width="100%"
         muted
         autoPlay
         playsInline
         className={`live-preview ${!recording ? 'hidden' : ''}`}
-        style={{ display: recording ? 'block' : 'none' }}
+        style={{ display: recording ? 'block' : 'none', maxWidth: '100%' }}
       />
 
       <h2>{recording ? 'Recording...' : 'Record Pothole'}</h2>
 
-      <button
-        className={`record-btn ${recording ? 'stop' : 'start'}`}
-        onClick={recording ? stopRecording : startRecording}
-      >
+      {/* Record/Stop button */}
+      <button className={`record-btn ${recording ? 'stop' : 'start'}`} onClick={recording ? stopRecording : startRecording}>
         {recording ? 'Stop Recording' : 'Start Recording'}
       </button>
 
-      {/* 📸 Photo Capture Button */}
+      {/* Capture photo button */}
       {recording && (
         <button className="photo-btn" onClick={capturePhoto}>
           Click Photo
         </button>
       )}
 
-      {/* Show capture message */}
+      {/* Temporary photo capture message */}
       {captureMessage && (
         <div
           style={{
@@ -295,9 +288,10 @@ const Recorder = () => {
         </div>
       )}
 
+      {/* Video playback after recording */}
       {mediaBlobUrl && (
         <div className="preview-section">
-          <video src={mediaBlobUrl} controls width="300" />
+          <video src={mediaBlobUrl} controls width="100%" />
           <div className="action-buttons">
             <button className="save-btn" onClick={saveFiles}>
               Download
@@ -309,17 +303,11 @@ const Recorder = () => {
         </div>
       )}
 
-      {/* Show clicked photos with GPS and timestamp overlays, only after recording stopped */}
+      {/* Captured photo thumbnails */}
       {!recording && photos.length > 0 && (
         <div className="photos-gallery" style={{ marginTop: '20px' }}>
           <h3>Captured Photos</h3>
-          <div
-            style={{
-              display: 'flex',
-              flexWrap: 'wrap',
-              gap: '10px',
-            }}
-          >
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px' }}>
             {photos.map((photo, i) => (
               <img
                 key={i}
@@ -346,338 +334,3 @@ const Recorder = () => {
 };
 
 export default Recorder;
-
-
-
-
-
-
-
-// import React, { useRef, useState, useEffect } from 'react';
-// import { generateGPX } from '../utils/gpxHelper';
-// import '../styles/recorder.css';
-// import JSZip from 'jszip';
-// import { saveAs } from 'file-saver';
-
-// const Recorder = () => {
-//   const [recording, setRecording] = useState(false);
-//   const [mediaBlobUrl, setMediaBlobUrl] = useState(null);
-//   const [locations, setLocations] = useState([]);
-//   const mediaRecorderRef = useRef(null);
-//   const recordedChunks = useRef([]);
-//   const streamRef = useRef(null);
-//   const locationIntervalRef = useRef(null);
-//   const videoPreviewRef = useRef(null);
-
-//   useEffect(() => {
-//     return () => {
-//       if (streamRef.current) {
-//         streamRef.current.getTracks().forEach((track) => track.stop());
-//       }
-//       clearInterval(locationIntervalRef.current);
-//     };
-//   }, []);
-
-//   const startRecording = async () => {
-//     try {
-//       const stream = await navigator.mediaDevices.getUserMedia({
-//         video: { facingMode: { ideal: 'environment' } },
-//         audio: true,
-//       });
-
-//       streamRef.current = stream;
-
-//       if (videoPreviewRef.current) {
-//         videoPreviewRef.current.srcObject = stream;
-//         videoPreviewRef.current.play().catch(console.warn);
-//       }
-
-//       mediaRecorderRef.current = new MediaRecorder(stream);
-//       recordedChunks.current = [];
-
-//       mediaRecorderRef.current.ondataavailable = (event) => {
-//         if (event.data.size > 0) {
-//           recordedChunks.current.push(event.data);
-//         }
-//       };
-
-//       mediaRecorderRef.current.onstop = () => {
-//         const blob = new Blob(recordedChunks.current, { type: 'video/webm' });
-//         setMediaBlobUrl(URL.createObjectURL(blob));
-//       };
-
-//       mediaRecorderRef.current.start();
-//       setRecording(true);
-//       setLocations([]);
-
-//       locationIntervalRef.current = setInterval(() => {
-//         navigator.geolocation.getCurrentPosition(
-//           (pos) => {
-//             const { latitude, longitude } = pos.coords;
-//             const timestamp = new Date().toISOString();
-//             setLocations(prev => [...prev, { lat: latitude, lon: longitude, time: timestamp }]);
-//           },
-//           (err) => console.warn("GPS Error:", err)
-//         );
-//       }, 1000);
-
-//     } catch (err) {
-//       console.error('Media Error:', err);
-//       alert('Please allow camera, microphone, and location access.');
-//     }
-//   };
-
-//   const stopRecording = () => {
-//     if (mediaRecorderRef.current?.state !== 'inactive') {
-//       mediaRecorderRef.current.stop();
-//     }
-
-//     streamRef.current?.getTracks().forEach(track => track.stop());
-//     clearInterval(locationIntervalRef.current);
-//     setRecording(false);
-//   };
-
-//   const saveAsZip = async () => {
-//     const zip = new JSZip();
-
-//     const videoBlob = new Blob(recordedChunks.current, { type: 'video/webm' });
-//     const gpxData = generateGPX(locations);
-//     const gpxBlob = new Blob([gpxData], { type: 'application/gpx+xml' });
-
-//     zip.file("pothole_video.webm", videoBlob);
-//     zip.file("pothole_locations.gpx", gpxBlob);
-
-//     const zipBlob = await zip.generateAsync({ type: "blob" });
-//     saveAs(zipBlob, "pothole_report.zip");
-//   };
-
-//   const reset = () => {
-//     setMediaBlobUrl(null);
-//     setLocations([]);
-//     recordedChunks.current = [];
-//   };
-
-//   return (
-//     <div className="recorder-container">
-//       {recording && (
-//         <video
-//           ref={videoPreviewRef}
-//           width="300"
-//           muted
-//           playsInline
-//           className="live-preview"
-//         />
-//       )}
-
-//       <h2>{recording ? "Recording..." : "Pothole Reporting"}</h2>
-
-//       <button
-//         className={`record-btn ${recording ? 'stop' : 'start'}`}
-//         onClick={recording ? stopRecording : startRecording}
-//       >
-//         {recording ? 'Stop Recording' : 'Start Recording'}
-//       </button>
-
-//       {mediaBlobUrl && (
-//         <div className="preview-section">
-//           <video src={mediaBlobUrl} controls width="300" />
-//           <div className="action-buttons">
-//             <button className="save-btn" onClick={saveAsZip}>Download ZIP</button>
-//             <button className="reset-btn" onClick={reset}>Reset</button>
-//           </div>
-//         </div>
-//       )}
-//     </div>
-//   );
-// };
-
-// export default Recorder;
-
-
-// import React, { useRef, useState, useEffect } from 'react';
-// import { generateGPX } from '../utils/gpxHelper';
-// import '../styles/recorder.css';
-// import { saveAs } from 'file-saver';
-// import JSZip from 'jszip';
-
-// const Recorder = () => {
-//   const [recording, setRecording] = useState(false);
-//   const [mediaBlobUrl, setMediaBlobUrl] = useState(null);
-//   const [locations, setLocations] = useState([]);
-//   const [potholes, setPotholes] = useState([]);
-
-//   const mediaRecorderRef = useRef(null);
-//   const recordedChunks = useRef([]);
-//   const streamRef = useRef(null);
-//   const locationWatchId = useRef(null);
-//   const videoPreviewRef = useRef(null);
-
-//   useEffect(() => {
-//     return () => {
-//       if (streamRef.current) {
-//         streamRef.current.getTracks().forEach(track => track.stop());
-//       }
-//       if (locationWatchId.current !== null) {
-//         navigator.geolocation.clearWatch(locationWatchId.current);
-//       }
-//     };
-//   }, []);
-
-//   const startRecording = async () => {
-//     try {
-//       const stream = await navigator.mediaDevices.getUserMedia({
-//         video: { facingMode: 'environment' },
-//         audio: false,
-//       });
-
-//       streamRef.current = stream;
-//       if (videoPreviewRef.current) {
-//         videoPreviewRef.current.srcObject = stream;
-//         videoPreviewRef.current.onloadedmetadata = () => {
-//           videoPreviewRef.current.play().catch(console.warn);
-//         };
-//       }
-
-//       mediaRecorderRef.current = new MediaRecorder(stream, {
-//         mimeType: 'video/webm',
-//       });
-
-//       recordedChunks.current = [];
-//       mediaRecorderRef.current.ondataavailable = (event) => {
-//         if (event.data.size > 0) {
-//           recordedChunks.current.push(event.data);
-//         }
-//       };
-
-//       mediaRecorderRef.current.onstop = () => {
-//         const blob = new Blob(recordedChunks.current, { type: 'video/webm' });
-//         setMediaBlobUrl(URL.createObjectURL(blob));
-//       };
-
-//       mediaRecorderRef.current.start();
-//       setRecording(true);
-//       setLocations([]);
-//       setPotholes([]);
-
-//       locationWatchId.current = navigator.geolocation.watchPosition(
-//         (pos) => {
-//           const { latitude, longitude } = pos.coords;
-//           const timestamp = new Date().toISOString();
-
-//           setLocations((prev) => {
-//             const last = prev[prev.length - 1];
-//             if (!last || last.lat !== latitude || last.lon !== longitude) {
-//               return [...prev, { lat: latitude, lon: longitude, time: timestamp }];
-//             }
-//             return prev;
-//           });
-//         },
-//         (err) => {
-//           console.warn('Geolocation error:', err);
-//         },
-//         {
-//           enableHighAccuracy: true,
-//           maximumAge: 1000,
-//           timeout: 5000,
-//         }
-//       );
-//     } catch (err) {
-//       alert('Please allow camera and location access.');
-//       console.error('Media error:', err);
-//     }
-//   };
-
-//   const stopRecording = () => {
-//     return new Promise((resolve) => {
-//       if (mediaRecorderRef.current?.state !== 'inactive') {
-//         mediaRecorderRef.current.onstop = () => {
-//           const blob = new Blob(recordedChunks.current, { type: 'video/webm' });
-//           const blobUrl = URL.createObjectURL(blob);
-//           setMediaBlobUrl(blobUrl);
-//           resolve(blob);
-//         };
-//         mediaRecorderRef.current.stop();
-//       }
-
-//       streamRef.current?.getTracks().forEach(track => track.stop());
-
-//       if (locationWatchId.current !== null) {
-//         navigator.geolocation.clearWatch(locationWatchId.current);
-//         locationWatchId.current = null;
-//       }
-
-//       setRecording(false);
-//     });
-//   };
-
-//   const saveFiles = async () => {
-//     const blob = mediaBlobUrl
-//       ? new Blob(recordedChunks.current, { type: 'video/webm' })
-//       : await stopRecording();
-
-//     const gpx = generateGPX(locations, potholes);
-//     const gpxBlob = new Blob([gpx], { type: 'application/gpx+xml' });
-
-//     const zip = new JSZip();
-//     zip.file('pothole_video.webm', blob);
-//     zip.file('pothole_locations.gpx', gpxBlob);
-
-//     const zipBlob = await zip.generateAsync({ type: 'blob' });
-//     saveAs(zipBlob, 'pothole_report.zip');
-//   };
-
-//   const reset = () => {
-//     setMediaBlobUrl(null);
-//     setLocations([]);
-//     setPotholes([]);
-//     recordedChunks.current = [];
-//   };
-
-//   const handlePotholeTap = () => {
-//     if (!recording) return;
-//     if (locations.length === 0) return;
-
-//     const latest = locations[locations.length - 1];
-//     setPotholes((prev) => [...prev, { ...latest }]);
-//     console.log('Pothole marked at:', latest);
-//   };
-
-//   return (
-//     <div className="recorder-container">
-//       <video
-//         ref={videoPreviewRef}
-//         width="300"
-//         muted
-//         autoPlay
-//         playsInline
-//         onClick={handlePotholeTap}
-//         className={`live-preview ${!recording ? 'hidden' : ''}`}
-//         style={{ display: recording ? 'block' : 'none' }}
-//       />
-
-//       <h2>{recording ? 'Recording in Progress' : 'Record Pothole'}</h2>
-
-//       <button
-//         className={`record-btn ${recording ? 'stop' : 'start'}`}
-//         onClick={recording ? stopRecording : startRecording}
-//       >
-//         {recording ? 'Stop Recording' : 'Start Recording'}
-//       </button>
-
-//       {mediaBlobUrl && (
-//         <div className="preview-section">
-//           <video src={mediaBlobUrl} controls width="300" />
-//           <div className="action-buttons">
-//             <button className="save-btn" onClick={saveFiles}>Download</button>
-//             <button className="reset-btn" onClick={reset}>Reset</button>
-//           </div>
-//           <p style={{ fontSize: '0.9em', color: '#777' }}>
-//             Download ZIP (video + GPX with pothole markers)
-//           </p>
-//         </div>
-//       )}
-//     </div>
-//   );
-// };
-
-// export default Recorder;
